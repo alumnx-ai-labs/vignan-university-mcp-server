@@ -1,0 +1,63 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            echo "🚀 Starting deployment..."
+
+            # Navigate to project directory
+            cd ${{ secrets.DEPLOY_PATH }}
+
+            # Pull latest code from main
+            git pull origin main
+
+            # Install/update dependencies
+            pip install -r requirements.txt
+
+            # Restart the server
+            # ---- UNCOMMENT THE ONE THAT MATCHES YOUR SETUP ----
+
+            # Option A: If using systemd service
+            sudo systemctl restart vignan-mcp-server
+
+            # Option B: If using PM2
+            # pm2 restart vignan-mcp-server
+
+            # Option C: If using screen/tmux
+            # screen -S mcp-server -X quit || true
+            # screen -dmS mcp-server python vignan_mcp_server.py
+
+            # Option D: If using Docker
+            # docker compose down && docker compose up -d
+
+            # Option E: If running directly with nohup
+            # pkill -f vignan_mcp_server.py || true
+            # nohup python vignan_mcp_server.py > /tmp/mcp-server.log 2>&1 &
+
+            echo "✅ Deployment complete!"
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "✅ Deployment succeeded"
+          else
+            echo "❌ Deployment failed — check the logs above"
+          fi

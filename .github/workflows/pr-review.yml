@@ -1,0 +1,177 @@
+name: Claude PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  claude-review:
+    runs-on: ubuntu-latest
+    steps:
+
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install flake8
+
+      - name: Get PR Diff
+        id: diff
+        run: |
+          DIFF=$(git diff origin/main...HEAD -- '*.py')
+          echo "$DIFF" > /tmp/pr_diff.txt
+          if [ -z "$DIFF" ]; then
+            echo "has_diff=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_diff=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run Lint
+        continue-on-error: true
+        run: |
+          flake8 --max-line-length=120 *.py > /tmp/lint_output.txt 2>&1 || true
+
+      - name: Claude Review
+        if: steps.diff.outputs.has_diff == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python3 << 'PYEOF'
+          import json, os, subprocess
+
+          # Read diff and lint
+          with open('/tmp/pr_diff.txt', 'r') as f:
+              diff = f.read()[:15000]
+          try:
+              with open('/tmp/lint_output.txt', 'r') as f:
+                  lint = f.read()[:3000]
+          except:
+              lint = "No lint issues"
+
+          prompt = f"""You are a senior Python code reviewer for a FastAPI MCP server project.
+
+          Lint output:
+          {lint}
+
+          PR Diff:
+          {diff}
+
+          Review this code for:
+          1. Bugs and logic errors
+          2. Security issues (especially around API keys, injection, etc.)
+          3. Missing error handling
+          4. Python best practices
+
+          Respond ONLY in this exact JSON format (no markdown, no backticks):
+          {{
+            "has_bugs": true/false,
+            "review_summary": "brief summary of findings",
+            "issues": [
+              {{
+                "file": "filename.py",
+                "severity": "bug|warning|suggestion",
+                "description": "what is wrong",
+                "fix": "suggested fix"
+              }}
+            ],
+            "approved": true/false
+          }}"""
+
+          payload = json.dumps({
+              "model": "claude-sonnet-4-20250514",
+              "max_tokens": 4000,
+              "messages": [{"role": "user", "content": prompt}]
+          })
+
+          with open('/tmp/request.json', 'w') as f:
+              f.write(payload)
+
+          result = subprocess.run([
+              'curl', '-s', 'https://api.anthropic.com/v1/messages',
+              '-H', 'Content-Type: application/json',
+              '-H', f'x-api-key: {os.environ["ANTHROPIC_API_KEY"]}',
+              '-H', 'anthropic-version: 2023-06-01',
+              '-d', f'@/tmp/request.json'
+          ], capture_output=True, text=True)
+
+          response = json.loads(result.stdout)
+          review_text = response['content'][0]['text']
+
+          with open('/tmp/claude_review.json', 'w') as f:
+              f.write(review_text)
+
+          print(review_text)
+          PYEOF
+
+      - name: Post Review Comment on PR
+        if: steps.diff.outputs.has_diff == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          COMMENT=$(python3 << 'PYEOF'
+          import json
+
+          try:
+              with open('/tmp/claude_review.json', 'r') as f:
+                  review = json.load(f)
+
+              msg = "## 🤖 Claude Code Review\n\n"
+              msg += f"**Summary:** {review.get('review_summary', 'N/A')}\n\n"
+
+              if review.get('approved'):
+                  msg += "✅ **Status: APPROVED** — Code looks good. Safe to merge.\n\n"
+              else:
+                  msg += "⚠️ **Status: CHANGES NEEDED**\n\n"
+
+              issues = review.get('issues', [])
+              if issues:
+                  msg += "### Issues Found:\n\n"
+                  for i, issue in enumerate(issues, 1):
+                      icon = {"bug": "🐛", "warning": "⚠️", "suggestion": "💡"}.get(issue.get('severity', ''), '📝')
+                      msg += f"{i}. {icon} **{issue.get('file', '')}** — `{issue.get('severity', '')}`\n"
+                      msg += f"   {issue.get('description', '')}\n"
+                      if issue.get('fix'):
+                          msg += f"   **Fix:** `{issue.get('fix', '')}`\n"
+                      msg += "\n"
+
+              if not review.get('approved'):
+                  msg += "\n---\n⏳ Please fix the issues above and push again. Claude will re-review automatically.\n"
+
+              print(msg)
+          except Exception as e:
+              print(f"## 🤖 Claude Code Review\n\nReview completed. See Actions logs for details.\n\nParse error: {e}")
+          PYEOF
+          )
+
+          gh pr comment ${{ github.event.pull_request.number }} --body "$COMMENT"
+
+      - name: Set review status
+        if: steps.diff.outputs.has_diff == 'true'
+        run: |
+          APPROVED=$(python3 -c "
+          import json
+          try:
+              with open('/tmp/claude_review.json') as f:
+                  r = json.load(f)
+              print('true' if r.get('approved') else 'false')
+          except:
+              print('false')
+          ")
+          if [ "$APPROVED" = "false" ]; then
+            echo "::warning::Claude found issues in the code. Check the PR comment for details."
+          fi
