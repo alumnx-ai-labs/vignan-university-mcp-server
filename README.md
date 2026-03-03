@@ -140,3 +140,5 @@ Health check endpoint.
 | `python-dotenv`       | Load environment variables from `.env`       |
 | `httpx`               | HTTP client (async support)                  |
 
+
+<!-- CI/CD Pipeline test -->
