@@ -1,0 +1,70 @@
+name: Auto Merge Approved PRs
+
+on:
+  issue_comment:
+    types: [created]
+  check_suite:
+    types: [completed]
+  workflow_run:
+    workflows: ["Claude PR Review"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check and Auto Merge Approved PRs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Checking for approved PRs to auto-merge..."
+
+          # Get all open PRs
+          gh pr list --state open --json number,title --jq '.[] | "\(.number) \(.title)"' | while read PR_NUM PR_TITLE; do
+
+            echo ""
+            echo "========================================="
+            echo "Checking PR #$PR_NUM: $PR_TITLE"
+            echo "========================================="
+
+            # Check if Claude approved this PR (look for APPROVED in comments)
+            HAS_APPROVAL=$(gh pr view "$PR_NUM" --json comments \
+              --jq '[.comments[] | select(.body | test("APPROVED"))] | length')
+
+            if [ "$HAS_APPROVAL" = "0" ]; then
+              echo "❌ PR #$PR_NUM — Not yet approved by Claude. Skipping."
+              continue
+            fi
+
+            echo "✅ Claude has approved PR #$PR_NUM"
+
+            # Check if PR is mergeable (no conflicts)
+            MERGEABLE=$(gh pr view "$PR_NUM" --json mergeable --jq '.mergeable')
+
+            if [ "$MERGEABLE" != "MERGEABLE" ]; then
+              echo "❌ PR #$PR_NUM — Has merge conflicts. Skipping."
+              gh pr comment "$PR_NUM" --body "⚠️ **Auto-merge blocked:** This PR has merge conflicts. Please resolve them and push again."
+              continue
+            fi
+
+            echo "✅ PR #$PR_NUM is mergeable (no conflicts)"
+
+            # Check if all status checks passed
+            PENDING=$(gh pr checks "$PR_NUM" 2>/dev/null | grep -c -v "pass" || echo "0")
+
+            echo "Attempting to merge PR #$PR_NUM..."
+            gh pr merge "$PR_NUM" --squash \
+              --subject "Auto-merge: $PR_TITLE (#$PR_NUM)" \
+              --body "✅ Auto-merged after Claude review approval. All checks passed." \
+              && echo "✅ Successfully merged PR #$PR_NUM!" \
+              || echo "❌ Failed to merge PR #$PR_NUM"
+
+          done

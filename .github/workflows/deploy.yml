@@ -23,35 +23,29 @@ jobs:
             echo "🚀 Starting deployment..."
 
             # Navigate to project directory
-            cd ${{ secrets.DEPLOY_PATH }}
+            cd /opt/vignan-university-mcp-server
 
             # Pull latest code from main
             git pull origin main
 
-            # Install/update dependencies
-            pip install -r requirements.txt
+            # Install/update dependencies using the venv
+            /opt/vignan-university-mcp-server/venv/bin/pip install -r requirements.txt
 
-            # Restart the server
-            # ---- UNCOMMENT THE ONE THAT MATCHES YOUR SETUP ----
+            # Kill the old process
+            pkill -f "vignan_mcp_server.py" || true
+            sleep 2
 
-            # Option A: If using systemd service
-            sudo systemctl restart vignan-mcp-server
+            # Restart the server using the venv python
+            nohup /opt/vignan-university-mcp-server/venv/bin/python vignan_mcp_server.py > /tmp/vignan-mcp-server.log 2>&1 &
+            sleep 3
 
-            # Option B: If using PM2
-            # pm2 restart vignan-mcp-server
-
-            # Option C: If using screen/tmux
-            # screen -S mcp-server -X quit || true
-            # screen -dmS mcp-server python vignan_mcp_server.py
-
-            # Option D: If using Docker
-            # docker compose down && docker compose up -d
-
-            # Option E: If running directly with nohup
-            # pkill -f vignan_mcp_server.py || true
-            # nohup python vignan_mcp_server.py > /tmp/mcp-server.log 2>&1 &
-
-            echo "✅ Deployment complete!"
+            # Verify it's running
+            if pgrep -f "vignan_mcp_server.py" > /dev/null; then
+              echo "✅ Deployment complete! Server is running."
+            else
+              echo "❌ Server failed to start. Check /tmp/vignan-mcp-server.log"
+              exit 1
+            fi
 
       - name: Notify deployment status
         if: always()
