@@ -113,3 +113,4 @@ if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
 # Pipeline test — this comment verifies CI/CD is working
 # Pipeline test 1772544295
+# Pipeline test 1772544596
