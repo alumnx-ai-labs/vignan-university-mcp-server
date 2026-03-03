@@ -112,3 +112,4 @@ if __name__ == "__main__":
     print("🚀 Vignan MCP Server running on http://localhost:8000")
     uvicorn.run(app, host="0.0.0.0", port=8000)
 # Pipeline test — this comment verifies CI/CD is working
+# Pipeline test 1772544295
